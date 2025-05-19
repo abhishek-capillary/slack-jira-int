@@ -1,95 +1,122 @@
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import PlainTextResponse # For direct responses if needed
+
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.fastapi.async_handler import AsyncSlackRequestHandler
-import uvicorn # For running the app
+import uvicorn
 
-from .config import settings, logger # Your centralized config and logger
-from . import slack_handler # Import your Slack event handlers
-from .jira_client import get_jira_client # To initialize Jira client on startup if needed
-# from .mcp_models import BotStateData # If you plan to use it more globally
+from .config import settings, logger
+from . import slack_handler
+from .jira_client import get_jira_client
 
-# Initialize Slack App with signing secret and token
+# Initialize Slack App
 slack_app = AsyncApp(
     token=settings.slack_bot_token,
     signing_secret=settings.slack_signing_secret,
-    # You can enable request verification explicitly if needed, but Bolt does it
 )
 app_handler = AsyncSlackRequestHandler(slack_app)
 
 # Create FastAPI app
 app = FastAPI()
 
-# --- Register Slack Event Handlers ---
-# These are wired up to functions in slack_handler.py
+# --- Slack Event Handlers ---
 
-# Handle 'message.im' events (Direct Messages to the bot)
-@slack_app.event("message") # More generic, bolt will filter for DMs if bot is only in DMs
-async def handle_all_messages(event, say, client, body):
-    # Bolt's 'message' listener can get all messages.
-    # We are primarily interested in DMs. 'message.im' is specific to DMs.
-    # Check if it's a DM and not from a bot
+@slack_app.event("message")
+async def handle_message_events(event, say, client, body):
     if event.get("channel_type") == "im" and not event.get("bot_id"):
-        # Delegate to the specific DM handler logic
         await slack_handler.handle_message_im(event, say, client, body)
-    # You can add other channel_type handlers or app_mention here if needed
 
-# Handle interactive components (buttons, menus, modals)
-@slack_app.action(".*") # Regex to catch all action_ids
-async def handle_all_actions(ack, body, client, say):
+# --- Slack Action Handlers ---
+
+# Specific handler for diagnostics (as suggested by Bolt warning)
+@slack_app.action("confirm_create_ticket_action")
+async def handle_confirm_create_action_specifically(ack, body, client, say):
+    logger.info("SLACK_BOLT SPECIFIC ACTION HANDLER: 'confirm_create_ticket_action' was hit!")
+    await ack()
+    # Delegate to the main handler logic, or handle directly for testing
+    # For now, let's just log and ack to see if this specific handler is reached.
+    # In a real scenario, you'd call your existing logic:
+    # await slack_handler.handle_interactive_action(ack, body, client, say)
+    # For this diagnostic, we'll let the generic one handle the full logic IF this one isn't hit.
+    # If this IS hit, then the problem might be how the generic one is registered or prioritized.
+    # For now, just ack and send a simple message to see if it works.
+    user_id = body.get("user", {}).get("id")
+    channel_id = body.get("channel", {}).get("id")
+    if user_id and channel_id:
+        # This will be a new message, not an update to the original button message.
+        # await client.chat_postMessage(channel=channel_id, text="Specific handler for confirm_create_ticket_action was called!")
+        # Actually, let's delegate to the proper handler to test the full flow if this specific listener works.
+        # The ack() has already been called.
+        # The `slack_handler.handle_interactive_action` expects `ack` to be passed to it,
+        # but it calls `await ack()` again. This is okay, subsequent acks are no-ops.
+        logger.info("SLACK_BOLT SPECIFIC ACTION HANDLER: Delegating to slack_handler.handle_interactive_action")
+        await slack_handler.handle_interactive_action(ack, body, client, say) # ack will be called again inside, which is fine
+    else:
+        logger.error("SLACK_BOLT SPECIFIC ACTION HANDLER: Could not get user_id or channel_id from body.")
+
+
+# Generic handler for all other actions
+@slack_app.action(".*")
+async def handle_all_other_actions(ack, body, client, say):
+    action_id = body.get("actions")[0].get("action_id") if body.get("actions") else "N/A"
+    logger.info(f"SLACK_BOLT GENERIC ACTION HANDLER (.*): Received action_id: '{action_id}'")
+
+    # Avoid double processing if the specific handler for 'confirm_create_ticket_action' was already invoked.
+    # This check is a bit of a hack for diagnostics.
+    # A cleaner way would be for the specific handler to fully handle it or not exist.
+    if action_id == "confirm_create_ticket_action":
+        logger.info("SLACK_BOLT GENERIC ACTION HANDLER: 'confirm_create_ticket_action' should have been caught by specific handler. This is unexpected if specific handler is working.")
+        # If the specific handler is meant to be the sole handler, this generic one might not even need to call the main logic for it.
+        # However, if the specific one is just for logging, then the generic one should proceed.
+        # Given the goal is to make `confirm_create_ticket_action` work, let's assume the specific one will delegate.
+        # For safety, if it reaches here, let it try to process.
+
     await slack_handler.handle_interactive_action(ack, body, client, say)
 
-# Handle modal view submissions (if you add modals)
-# @slack_app.view(/.*/) # Regex to catch all callback_ids for views
-# async def handle_all_view_submissions(ack, body, client, view, say):
-#     # Delegate to a view handler in slack_handler.py
-#     await slack_handler.handle_view_submission(ack, body, client, view, say, logger)
 
-
-# --- FastAPI Endpoints for Slack ---
+# --- FastAPI Endpoints ---
 
 @app.post("/slack/events")
 async def slack_events_endpoint(req: Request):
-    """
-    Endpoint for Slack Events API.
-    All events (like messages, app mentions) will be sent here.
-    """
+    logger.info("FASTAPI ENDPOINT: Received request on /slack/events")
     return await app_handler.handle(req)
 
 @app.post("/slack/interactive")
 async def slack_interactive_endpoint(req: Request):
-    """
-    Endpoint for Slack Interactivity & Shortcuts.
-    Button clicks, modal submissions, etc., will be sent here.
-    """
-    return await app_handler.handle(req)
+    logger.info("FASTAPI ENDPOINT: Received request on /slack/interactive")
+    try:
+        raw_body = await req.body()
+        logger.debug(f"FASTAPI ENDPOINT: /slack/interactive RAW BODY: {raw_body.decode()}")
+        logger.debug(f"FASTAPI ENDPOINT: /slack/interactive HEADERS: {req.headers}")
+    except Exception as e:
+        logger.error(f"FASTAPI ENDPOINT: Error reading body/headers from /slack/interactive: {e}")
 
-# --- Application Startup Event ---
+    # The app_handler.handle(req) is what dispatches to the @slack_app.action listeners
+    response = await app_handler.handle(req)
+    logger.info(f"FASTAPI ENDPOINT: /slack/interactive response status: {response.status_code}")
+    return response
+
+# --- Application Lifecycle ---
+
 @app.on_event("startup")
 async def startup_event():
     logger.info("Application startup...")
     logger.info("Initializing Jira client connection...")
-    if get_jira_client(): # Attempt to initialize and test connection
+    if get_jira_client():
         logger.info("Jira client connected successfully on startup.")
     else:
-        logger.error("Failed to connect to Jira on startup. Check credentials and Jira server reachability.")
+        logger.error("Failed to connect to Jira on startup.")
     logger.info(f"Default Jira Project Key: {settings.default_jira_project_key}")
-    logger.info(f"Slack Bot Token: {settings.slack_bot_token[:5]}... (masked)") # Be careful logging tokens
+    logger.info(f"Slack Bot Token: {settings.slack_bot_token[:5]}... (masked)")
     logger.info("Application ready.")
 
-
-# --- Basic Health Check Endpoint ---
 @app.get("/")
 async def root():
     return {"message": "Jira Slackbot is running!"}
 
-# --- To run the app (for local development without Docker) ---
-# You would typically run this using: uvicorn app.main:app --reload --port 3000
-# The Dockerfile/docker-compose.yml will handle this in a containerized environment.
 if __name__ == "__main__":
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0", # Listen on all available IPs
-        port=int(settings.port) if hasattr(settings, 'port') else 3000, # From .env or default
-        reload=True, # Enable auto-reload for development
-        log_level=settings.app_log_level.lower()
-    )
+    run_host = "0.0.0.0"
+    run_port = 3000
+    # if hasattr(settings, 'host'): run_host = settings.host
+    # if hasattr(settings, 'port'): run_port = settings.port
+    uvicorn.run("app.main:app", host=run_host, port=run_port, reload=True, log_level=settings.app_log_level.lower())
