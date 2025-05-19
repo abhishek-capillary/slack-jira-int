@@ -11,8 +11,11 @@ def get_jira_client() -> Optional[JIRA]:
         try:
             logger.info(f"Initializing Jira client for server: {settings.jira_server}")
             options = {'server': settings.jira_server}
+            # Ensure SSL verification is enabled by default, or configurable if needed.
+            # For self-signed certs in dev, options might include 'verify': False, but not for prod.
             jira_client = JIRA(options, basic_auth=(settings.jira_username, settings.jira_api_token))
             # Test connection by fetching server info or projects
+            # This implicitly tests authentication and server reachability.
             jira_client.server_info()
             logger.info("Jira client initialized successfully.")
         except JIRAError as e:
@@ -34,11 +37,11 @@ async def create_jira_ticket(ticket_data: JiraTicketData) -> Optional[CreatedTic
         'summary': ticket_data.summary,
         'description': ticket_data.description,
         'issuetype': {'name': ticket_data.issue_type_name},
-        # 'reporter': {'name': ticket_data.reporter_email}, # Requires Jira user mapping
+        # 'reporter': {'name': ticket_data.reporter_email}, # Requires Jira user mapping or ensuring the user exists
         # Add other fields like priority, assignee, custom fields as needed
         # 'priority': {'name': ticket_data.priority_name} if ticket_data.priority_name else None,
     }
-    # Filter out None values from fields
+    # Filter out None values from fields that might be optional
     fields = {k: v for k, v in fields.items() if v is not None}
 
     try:
@@ -67,36 +70,42 @@ async def search_similar_jira_tickets(
         logger.error("Jira client not available. Cannot search tickets.")
         return []
 
-    jql_parts = []
+    jql_conditions = [] # Store individual conditions here
+
     if project_key:
-        jql_parts.append(f'project = "{project_key}"')
+        jql_conditions.append(f'project = "{project_key}"')
     else: # Fallback to default if not specified for search
-        jql_parts.append(f'project = "{settings.default_jira_project_key}"')
+        jql_conditions.append(f'project = "{settings.default_jira_project_key}"')
 
 
     if issue_types:
         types_str = ", ".join([f'"{it}"' for it in issue_types])
-        jql_parts.append(f"issuetype IN ({types_str})")
+        jql_conditions.append(f"issuetype IN ({types_str})")
     else: # Default search issue types
-        jql_parts.append("issuetype IN (Bug, Story, Task)") # As per plan
+        jql_conditions.append("issuetype IN (Bug, Story, Task)") # As per plan
 
-    search_terms = []
+    search_terms_jql_parts = []
     if summary:
-        # Escape special characters for JQL summary search if necessary, though JIRA library might handle some.
-        # For simplicity, direct use here. Complex summaries might need more robust escaping.
-        # Example: summary_escaped = summary.replace('"', '\\"')
-        search_terms.append(f'summary ~ "{summary}"')
+        # Escape special characters for JQL summary search.
+        # JQL uses backslash to escape: ", \, etc.
+        # A more robust solution might involve a regex or a dedicated escaping function.
+        summary_escaped = summary.replace('"', '\\"')
+        search_terms_jql_parts.append(f'summary ~ "{summary_escaped}"')
 
     if description_keywords:
         for keyword in description_keywords:
-            # keyword_escaped = keyword.replace('"', '\\"')
-            search_terms.append(f'description ~ "{keyword}"')
+            keyword_escaped = keyword.replace('"', '\\"')
+            search_terms_jql_parts.append(f'description ~ "{keyword_escaped}"')
 
-    if search_terms:
-        jql_parts.append(f"({' OR '.join(search_terms)})")
+    if search_terms_jql_parts:
+        # Join multiple search terms with OR inside parentheses
+        jql_conditions.append(f"({' OR '.join(search_terms_jql_parts)})")
 
-    jql_parts.append("ORDER BY created DESC")
-    jql_query = " AND ".join(jql_parts)
+    # Join all conditions with "AND"
+    jql_query_conditions = " AND ".join(jql_conditions)
+
+    # Append the ORDER BY clause correctly
+    jql_query = f"{jql_query_conditions} ORDER BY created DESC"
 
     try:
         logger.info(f"Searching Jira with JQL: {jql_query}")
