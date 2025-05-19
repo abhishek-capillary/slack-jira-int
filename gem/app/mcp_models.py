@@ -5,7 +5,7 @@ class SlackContext(BaseModel):
     user_id: str
     channel_id: str
     team_id: Optional[str] = None
-    thread_ts: Optional[str] = None # If handling threaded replies
+    thread_ts: Optional[str] = None
 
 class InitialRequestContext(BaseModel):
     source: str = "slack"
@@ -14,46 +14,61 @@ class InitialRequestContext(BaseModel):
     channel_id: str
     text: str
     timestamp: str
-    slack_context: SlackContext # For easier passing
+    slack_context: SlackContext
 
 class ParsedTicketDetails(BaseModel):
     summary: str
     description: str
-    # Use an alias to map the JSON key 'issueType' from Claude's response
-    # to the Pydantic model field 'issue_type'.
-    issue_type: str = Field(..., alias='issueType') # e.g., "Bug", "Task", "Story"
+    issue_type: str = Field(..., alias='issueType')
 
 class EnrichedTicketContext(BaseModel):
+    """Context after initial NLP parsing of the user's request."""
     slack_context: SlackContext
     raw_request: str
     parsed_ticket_details: ParsedTicketDetails
-    status: str = "pending_similarity_check"
-    # You might store user object from slack here too if needed
+    # No status here, this is just the parsed data before project selection
+
+class JiraProject(BaseModel):
+    """Represents essential information about a Jira project."""
+    id: str
+    key: str
+    name: str
+
+class ProjectSelectionContext(BaseModel):
+    """Context when the bot is waiting for the user to select a Jira project."""
+    enriched_ticket_context: EnrichedTicketContext # Contains parsed summary, desc, type
+    available_projects: List[JiraProject]
+    status: str = "pending_project_selection"
 
 class SimilarTicketInfo(BaseModel):
     key: str
     summary: str
     url: str
-    score: Optional[float] = None # Optional similarity score
+    score: Optional[float] = None
 
 class SimilarityCheckContext(BaseModel):
-    enriched_context: EnrichedTicketContext
+    """Context after project is selected and bot is checking for similar tickets (or waiting for user decision)."""
+    slack_context: SlackContext # From EnrichedTicketContext
+    raw_request: str            # From EnrichedTicketContext
+    parsed_ticket_details: ParsedTicketDetails # From EnrichedTicketContext
+    selected_project_key: str   # The project chosen by the user
     similar_tickets_found: List[SimilarTicketInfo] = []
-    status: str = "pending_user_decision_on_similarity"
+    status: str = "pending_user_decision_on_similarity" # Or pending_confirmation if no similar found
 
 class JiraTicketData(BaseModel):
-    project_key: str
+    project_key: str # This will now be the user-selected project key
     summary: str
     description: str
-    issue_type_name: str # Name like "Bug", "Task". Map to ID if Jira needs it.
-    reporter_email: Optional[str] = None # Or Jira account ID
-    # priority_name: Optional[str] = None
-    # assignee_name: Optional[str] = None
-    # custom_fields: Optional[Dict[str, Any]] = None
+    issue_type_name: str
+    reporter_email: Optional[str] = None
+
+    brand: Optional[str] = None
+    environment: Optional[str] = None
+    components: Optional[List[Dict[str, str]]] = None
 
 class FinalTicketCreationContext(BaseModel):
     slack_context: SlackContext
-    jira_ticket_data: JiraTicketData
+    jira_ticket_data: JiraTicketData # Will include the user-selected project_key
     status: str = "ready_for_creation"
 
 class CreatedTicketInfo(BaseModel):
@@ -67,13 +82,8 @@ class CreationConfirmationContext(BaseModel):
     status: str = "ticket_created_successfully"
 
 class BotStateData(BaseModel):
-    """
-    A model to hold transient state for a user interaction flow,
-    e.g., when waiting for user confirmation after similarity check.
-    Key could be user_id or channel_id or a combination.
-    """
     user_id: str
     channel_id: str
-    current_mcp_stage: Optional[str] = None # e.g. "SimilarityCheckContext"
+    current_mcp_stage: Optional[str] = None # e.g., "ProjectSelectionContext", "SimilarityCheckContext"
     context_data: Dict[str, Any] # Store the actual MCP model as dict
-    timestamp: float # To expire old states
+    timestamp: float
