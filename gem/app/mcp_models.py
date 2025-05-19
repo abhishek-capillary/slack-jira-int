@@ -19,7 +19,9 @@ class InitialRequestContext(BaseModel):
 class ParsedTicketDetails(BaseModel):
     summary: str
     description: str
-    issue_type: str # e.g., "Bug", "Task", "Story" - map to Jira's actual types
+    # Use an alias to map the JSON key 'issueType' from Claude's response
+    # to the Pydantic model field 'issue_type'.
+    issue_type: str = Field(..., alias='issueType') # e.g., "Bug", "Task", "Story"
 
 class EnrichedTicketContext(BaseModel):
     slack_context: SlackContext
