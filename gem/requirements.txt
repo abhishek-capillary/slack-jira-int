@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+slack_bolt
+jira
+anthropic
+python-dotenv
+requests
+pydantic
+aiohttp>=3.8.0
+
+# For testing (optional, add as needed)
+# pytest
+# pytest-asyncio
+# httpx

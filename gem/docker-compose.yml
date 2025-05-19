@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  slackbot:
+    build: .
+    container_name: jira_slackbot_app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 3000 --reload # --reload for dev
+    volumes:
+      - ./app:/usr/src/app/app   # Mount your app code for live changes
+      # Mount your .env file for secrets if not using environment section below
+      # - ./.env:/usr/src/app/.env
+    ports:
+      - "3000:3000" # Map host port 3000 to container port 3000
+    env_file:
+      - .env # Load environment variables from .env file
+    # environment: # Alternatively, set environment variables here (less secure for secrets)
+    #   - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+    #   - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET}
+    #   - JIRA_SERVER=${JIRA_SERVER}
+    #   - JIRA_USERNAME=${JIRA_USERNAME}
+    #   - JIRA_API_TOKEN=${JIRA_API_TOKEN}
+    #   - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+    #   - DEFAULT_JIRA_PROJECT_KEY=${DEFAULT_JIRA_PROJECT_KEY}
+    #   - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
+    restart: unless-stopped # Or 'always' for production-like behavior
