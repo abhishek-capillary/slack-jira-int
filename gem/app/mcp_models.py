@@ -17,16 +17,16 @@ class InitialRequestContext(BaseModel):
     slack_context: SlackContext
 
 class ParsedTicketDetails(BaseModel):
+    """Details parsed from the user's initial text by NLP."""
     summary: str
     description: str
-    issue_type: str = Field(..., alias='issueType')
+    issue_type: str = Field(..., alias='issueType') # NLP's suggestion for issue type
 
 class EnrichedTicketContext(BaseModel):
     """Context after initial NLP parsing of the user's request."""
     slack_context: SlackContext
     raw_request: str
     parsed_ticket_details: ParsedTicketDetails
-    # No status here, this is just the parsed data before project selection
 
 class JiraProject(BaseModel):
     """Represents essential information about a Jira project."""
@@ -34,11 +34,26 @@ class JiraProject(BaseModel):
     key: str
     name: str
 
+class JiraIssueType(BaseModel):
+    """Represents an issue type available in Jira for a project."""
+    id: str
+    name: str
+    description: Optional[str] = None
+    icon_url: Optional[str] = Field(None, alias="iconUrl")
+    # subtask: bool = False # createmeta might not directly give this easily, but good to have if needed
+
 class ProjectSelectionContext(BaseModel):
     """Context when the bot is waiting for the user to select a Jira project."""
-    enriched_ticket_context: EnrichedTicketContext # Contains parsed summary, desc, type
+    enriched_ticket_context: EnrichedTicketContext
     available_projects: List[JiraProject]
     status: str = "pending_project_selection"
+
+class IssueTypeSelectionContext(BaseModel):
+    """Context when the bot is waiting for the user to select an issue type for the chosen project."""
+    enriched_ticket_context: EnrichedTicketContext # Contains original parsed summary, desc, NLP issue type
+    selected_project: JiraProject # The project chosen by the user
+    available_issue_types: List[JiraIssueType] # Fetched for the selected_project
+    status: str = "pending_issue_type_selection"
 
 class SimilarTicketInfo(BaseModel):
     key: str
@@ -47,19 +62,21 @@ class SimilarTicketInfo(BaseModel):
     score: Optional[float] = None
 
 class SimilarityCheckContext(BaseModel):
-    """Context after project is selected and bot is checking for similar tickets (or waiting for user decision)."""
-    slack_context: SlackContext # From EnrichedTicketContext
-    raw_request: str            # From EnrichedTicketContext
-    parsed_ticket_details: ParsedTicketDetails # From EnrichedTicketContext
-    selected_project_key: str   # The project chosen by the user
+    """Context after project and issue type are selected, and bot is checking for similar tickets."""
+    slack_context: SlackContext
+    raw_request: str
+    parsed_ticket_details: ParsedTicketDetails # Original NLP parsed details
+    selected_project: JiraProject
+    selected_issue_type: JiraIssueType # The issue type chosen by the user
     similar_tickets_found: List[SimilarTicketInfo] = []
-    status: str = "pending_user_decision_on_similarity" # Or pending_confirmation if no similar found
+    status: str = "pending_user_decision_on_similarity"
 
 class JiraTicketData(BaseModel):
-    project_key: str # This will now be the user-selected project key
+    """Data structure for creating the final Jira ticket."""
+    project_key: str
     summary: str
     description: str
-    issue_type_name: str
+    issue_type_name: str # The name of the user-selected (or validated NLP) issue type
     reporter_email: Optional[str] = None
 
     brand: Optional[str] = None
@@ -68,7 +85,7 @@ class JiraTicketData(BaseModel):
 
 class FinalTicketCreationContext(BaseModel):
     slack_context: SlackContext
-    jira_ticket_data: JiraTicketData # Will include the user-selected project_key
+    jira_ticket_data: JiraTicketData
     status: str = "ready_for_creation"
 
 class CreatedTicketInfo(BaseModel):
@@ -84,6 +101,6 @@ class CreationConfirmationContext(BaseModel):
 class BotStateData(BaseModel):
     user_id: str
     channel_id: str
-    current_mcp_stage: Optional[str] = None # e.g., "ProjectSelectionContext", "SimilarityCheckContext"
-    context_data: Dict[str, Any] # Store the actual MCP model as dict
+    current_mcp_stage: Optional[str] = None
+    context_data: Dict[str, Any]
     timestamp: float
