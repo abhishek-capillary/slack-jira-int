@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 
+# --- Slack Context and Initial Request ---
 class SlackContext(BaseModel):
     user_id: str
     channel_id: str
@@ -16,11 +17,12 @@ class InitialRequestContext(BaseModel):
     timestamp: str
     slack_context: SlackContext
 
+# --- NLP and Project/Issue Type Selection ---
 class ParsedTicketDetails(BaseModel):
     """Details parsed from the user's initial text by NLP."""
     summary: str
     description: str
-    issue_type: str = Field(..., alias='issueType') # NLP's suggestion for issue type
+    issue_type: str = Field(..., alias='issueType') # NLP's suggestion
 
 class EnrichedTicketContext(BaseModel):
     """Context after initial NLP parsing of the user's request."""
@@ -40,7 +42,6 @@ class JiraIssueType(BaseModel):
     name: str
     description: Optional[str] = None
     icon_url: Optional[str] = Field(None, alias="iconUrl")
-    # subtask: bool = False # createmeta might not directly give this easily, but good to have if needed
 
 class ProjectSelectionContext(BaseModel):
     """Context when the bot is waiting for the user to select a Jira project."""
@@ -50,11 +51,44 @@ class ProjectSelectionContext(BaseModel):
 
 class IssueTypeSelectionContext(BaseModel):
     """Context when the bot is waiting for the user to select an issue type for the chosen project."""
-    enriched_ticket_context: EnrichedTicketContext # Contains original parsed summary, desc, NLP issue type
-    selected_project: JiraProject # The project chosen by the user
-    available_issue_types: List[JiraIssueType] # Fetched for the selected_project
+    enriched_ticket_context: EnrichedTicketContext
+    selected_project: JiraProject
+    available_issue_types: List[JiraIssueType]
     status: str = "pending_issue_type_selection"
 
+# --- Required Field Details from Createmeta ---
+class AllowedValue(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    value: Optional[str] = None
+
+class RequiredFieldDetail(BaseModel):
+    field_id: str
+    name: str
+    is_custom: bool = Field(False, description="Indicates if the field is a custom field")
+    allowed_values: Optional[List[AllowedValue]] = Field(None, alias="allowedValues")
+    # schema_type: Optional[str] = None # To store field_info['schema']['type'] if needed
+
+class SequentialFieldsInputContext(BaseModel): # RENAMED and RESTRUCTURED
+    """Context for sequentially collecting dynamically required Jira fields."""
+    enriched_ticket_context: EnrichedTicketContext
+    selected_project: JiraProject
+    selected_issue_type: JiraIssueType
+
+    # List of fields that still need to be collected from the user.
+    # This list will be filtered to exclude summary, description, project, issuetype.
+    fields_to_collect_sequentially: List[RequiredFieldDetail]
+
+    # Index of the current field in 'fields_to_collect_sequentially' being prompted for.
+    current_field_prompt_index: int = 0
+
+    # Stores values as {field_id: value} as they are collected.
+    collected_dynamic_field_values: Dict[str, Any] = Field(default_factory=dict)
+
+    status: str = "pending_sequential_field_input"
+
+
+# --- Similarity and Final Ticket Data ---
 class SimilarTicketInfo(BaseModel):
     key: str
     summary: str
@@ -62,27 +96,25 @@ class SimilarTicketInfo(BaseModel):
     score: Optional[float] = None
 
 class SimilarityCheckContext(BaseModel):
-    """Context after project and issue type are selected, and bot is checking for similar tickets."""
     slack_context: SlackContext
     raw_request: str
-    parsed_ticket_details: ParsedTicketDetails # Original NLP parsed details
+    parsed_ticket_details: ParsedTicketDetails
     selected_project: JiraProject
-    selected_issue_type: JiraIssueType # The issue type chosen by the user
+    selected_issue_type: JiraIssueType
+    dynamic_fields_data: Optional[Dict[str, Any]] = None # User-provided values for dynamic fields
     similar_tickets_found: List[SimilarTicketInfo] = []
     status: str = "pending_user_decision_on_similarity"
 
 class JiraTicketData(BaseModel):
-    """Data structure for creating the final Jira ticket."""
     project_key: str
     summary: str
     description: str
-    issue_type_name: str # The name of the user-selected (or validated NLP) issue type
+    issue_type_name: str
     reporter_email: Optional[str] = None
-
-    brand: Optional[str] = None
-    environment: Optional[str] = None
     components: Optional[List[Dict[str, str]]] = None
+    dynamic_fields: Optional[Dict[str, Any]] = None # Stores {field_id: value} for user-provided dynamic fields
 
+# --- Final Contexts and Bot State ---
 class FinalTicketCreationContext(BaseModel):
     slack_context: SlackContext
     jira_ticket_data: JiraTicketData
