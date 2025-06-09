@@ -2,11 +2,11 @@ from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.errors import SlackApiError
 from .config import settings, logger
 from .mcp_models import (
-    InitialRequestContext, SlackContext, EnrichedTicketContext, ParsedTicketDetails,
+    SlackContext, EnrichedTicketContext, ParsedTicketDetails,
     SimilarityCheckContext, FinalTicketCreationContext, JiraTicketData,
-    CreationConfirmationContext, SimilarTicketInfo, BotStateData, JiraProject,
-    ProjectSelectionContext, JiraIssueType, IssueTypeSelectionContext,
-    RequiredFieldDetail, AllowedValue, SequentialFieldsInputContext # Changed from RequiredFieldsInputContext
+    SimilarTicketInfo, BotStateData, JiraProject, CreatedTicketInfo,
+    ProjectSelectionContext, IssueTypeSelectionContext,
+    SequentialFieldsInputContext
 )
 from .nlp_service import extract_ticket_details_from_text
 from .jira_client import (
@@ -16,7 +16,6 @@ from .jira_client import (
 )
 from typing import Dict, Any, List, Optional
 import time
-import json
 
 # In-memory store for conversation state
 conversation_state_store: Dict[str, Any] = {}

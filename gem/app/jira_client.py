@@ -153,21 +153,11 @@ async def create_jira_ticket(ticket_data: JiraTicketData) -> Optional[CreatedTic
         'summary': ticket_data.summary,
         'description': ticket_data.description,
         'issuetype': {'name': ticket_data.issue_type_name},
+        "priority": {"name": ticket_data.dynamic_fields.get("priority")},
+        "customfield_11997": [{"value": brand} for brand in [ticket_data.dynamic_fields.get("customfield_11997")]], #brand
+        "customfield_11800": [{"value": env} for env in [ticket_data.dynamic_fields.get("customfield_11800")]], #environment
+        "components": [{"name": comp} for comp in [ticket_data.dynamic_fields.get("components")]], #components
     }
-
-    # Add standard custom fields if they exist and have values
-    if ticket_data.brand is not None: fields['customfield_11997'] = ticket_data.brand
-    if ticket_data.environment is not None: fields['customfield_11800'] = ticket_data.environment
-    # if ticket_data.components: fields['components'] = ticket_data.components # Still commented out
-
-    # Add dynamically fetched required fields
-    if ticket_data.dynamic_fields:
-        for field_id, field_value in ticket_data.dynamic_fields.items():
-            if field_value is not None: # Only add if a value was provided
-                fields[field_id] = field_value
-                logger.debug(f"Added dynamic field {field_id}: {field_value} to Jira payload")
-            else:
-                logger.warning(f"Dynamic field {field_id} has None value, not adding to payload.")
 
     try:
         logger.info(f"Attempting to create Jira ticket with payload: {fields}")
