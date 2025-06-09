@@ -52,6 +52,7 @@ async def handle_issue_type_selection_action(ack, body, client, say):
 # Generic action handler for other interactive components in messages
 @slack_app.action(".*")
 async def handle_all_other_actions(ack, body, client, say):
+    await ack()
     action_id = "N/A"
     if body.get("actions") and len(body["actions"]) > 0:
         action_id = body["actions"][0].get("action_id", "N/A")

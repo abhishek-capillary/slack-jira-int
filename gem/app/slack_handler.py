@@ -73,6 +73,11 @@ async def _ask_for_next_required_field(client: AsyncWebClient, channel_id: str, 
             blocks = build_similarity_check_blocks(similarity_context)
             await client.chat_postMessage(channel=channel_id, blocks=blocks, text="Found similar tickets after collecting details.")
         else:
+            # Display the dynamic values in a more readable format
+            display_dynamic_values = collected_dynamic_values.copy()
+            display_dynamic_values["Brand"] = display_dynamic_values.pop("customfield_11997")
+            display_dynamic_values["Environment"] = display_dynamic_values.pop("customfield_11800")
+
             jira_data = JiraTicketData(
                 project_key=selected_project.key,
                 summary=enriched_ctx.parsed_ticket_details.summary,
@@ -85,7 +90,8 @@ async def _ask_for_next_required_field(client: AsyncWebClient, channel_id: str, 
             bot_state.current_mcp_stage = FinalTicketCreationContext.__name__
             bot_state.context_data = final_ticket_ctx.model_dump(by_alias=True)
             conversation_state_store[state_key] = bot_state.model_dump()
-            blocks = build_pre_creation_confirmation_blocks(final_ticket_ctx)
+
+            blocks = build_pre_creation_confirmation_blocks(final_ticket_ctx, display_dynamic_values)
             await client.chat_postMessage(channel=channel_id, blocks=blocks, text="Please confirm ticket details (including additional fields).")
         return
 
@@ -150,7 +156,7 @@ def build_project_selection_blocks(context: ProjectSelectionContext) -> List[Dic
         if len(project_options) >= 100: break
     if not project_options: return [{"type": "section", "text": {"type": "mrkdwn", "text": "No projects formatted."}}]
     return [
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"Parsed request for: *'{context.enriched_ticket_context.parsed_ticket_details.summary}'*.\nSelect Jira project:"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"Creating issue with summary: *'{context.enriched_ticket_context.parsed_ticket_details.summary}'*.\n\nPlease select the project in which you want to create the issue:"}},
         {"type": "actions", "block_id": "project_selection_block", "elements": [{"type": "static_select", "placeholder": {"type": "plain_text", "text": "Select a project", "emoji": True}, "options": project_options, "action_id": "select_jira_project_action"}]},
         {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Cancel", "emoji": True}, "action_id": "cancel_creation_project_select", "value": "cancel_creation_project_select", "style": "danger"}]}
     ]
@@ -173,7 +179,7 @@ def build_issue_type_selection_blocks(context: IssueTypeSelectionContext) -> Lis
     select_el = {"type": "static_select", "placeholder": {"type": "plain_text", "text": "Select an issue type", "emoji": True}, "options": issue_type_options, "action_id": "select_jira_issue_type_action"}
     if initial_opt: select_el["initial_option"] = initial_opt
     return [
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"Project *{context.selected_project.name} ({context.selected_project.key})* chosen.\nNLP suggested: *'{context.enriched_ticket_context.parsed_ticket_details.issue_type}'*.\nConfirm or select issue type:"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"Project *{context.selected_project.name} ({context.selected_project.key})* chosen.\n suggested Issue Type: *'{context.enriched_ticket_context.parsed_ticket_details.issue_type}'*.\nConfirm or select a different issue type:"}},
         {"type": "actions", "block_id": "issue_type_selection_block", "elements": [select_el]},
         {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Cancel", "emoji": True}, "action_id": "cancel_creation_issue_type_select", "value": "cancel_creation_issue_type_select", "style": "danger"}]}
     ]
@@ -194,7 +200,7 @@ def build_similarity_check_blocks(context: SimilarityCheckContext) -> List[Dict]
             {"type": "button", "text": {"type": "plain_text", "text": "Cancel", "emoji": True}, "action_id": "cancel_creation_similarity", "value": "cancel_creation_similarity"}]})
     return blocks
 
-def build_pre_creation_confirmation_blocks(context: FinalTicketCreationContext) -> List[Dict]:
+def build_pre_creation_confirmation_blocks(context: FinalTicketCreationContext, display_dynamic_values: Dict) -> List[Dict]:
     # ... (implementation from previous version, ensure it iterates context.jira_ticket_data.dynamic_fields)
     ticket = context.jira_ticket_data
     fields_to_display = [
@@ -202,8 +208,8 @@ def build_pre_creation_confirmation_blocks(context: FinalTicketCreationContext) 
         {"type": "mrkdwn", "text": f"*Type:*\n{ticket.issue_type_name}"},
         {"type": "mrkdwn", "text": f"*Summary:*\n{ticket.summary}"},
     ]
-    if ticket.dynamic_fields:
-        for field_id, field_value in ticket.dynamic_fields.items():
+    if display_dynamic_values:
+        for field_id, field_value in display_dynamic_values.items():
             field_name_display = field_id # Ideally map to actual field name
             fields_to_display.append({"type": "mrkdwn", "text": f"*{field_name_display.replace('_', ' ').title()}:*\n{field_value}"})
     blocks = [
@@ -212,7 +218,7 @@ def build_pre_creation_confirmation_blocks(context: FinalTicketCreationContext) 
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*Description:*\n{ticket.description}"}},
         {"type": "actions", "elements": [
                 {"type": "button", "text": {"type": "plain_text", "text": "Confirm & Create Ticket", "emoji": True}, "action_id": "confirm_create_ticket_action", "value": "confirm_create", "style": "primary"},
-                {"type": "button", "text": {"type": "plain_text", "text": "Cancel", "emoji": True}, "action_id": "cancel_creation_confirmation", "value": "cancel_creation_confirmation"}]}]
+                {"type": "button", "text": {"type": "plain_text", "text": "Cancel", "emoji": True}, "action_id": "cancel_creation_confirmation", "value": "cancel_creation_confirmation", "style": "danger"}]}]
     return blocks
 
 # --- Main Handler Logic ---
@@ -278,6 +284,7 @@ async def handle_message_im(event: Dict, say, client: AsyncWebClient, body: Dict
 
 
 async def handle_interactive_action(ack, body: Dict, client: AsyncWebClient, say, jira_projects_cache: List[JiraProject]):
+    # await ack()
     user_id = body["user"]["id"]
     channel_id = body["channel"]["id"]
     action_id, action_value = None, None
